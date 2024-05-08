@@ -413,83 +413,79 @@ and a description of their effects, see the variable
 (defun names--define-namespace-implementation (name body)
   "Namespace BODY using NAME.
 See `define-namespace' for more information."
-  (unwind-protect
-      (let* ((names--name name)
-             (names--regexp
-              (concat "\\`" (regexp-quote (symbol-name name))))
-             (names--current-run 0)
-             ;; Use the :protection keyword to change this.
-             (names--protection "\\`::")
-             (names--bound
-              (names--remove-namespace-from-list
-               (names--filter-if-bound byte-compile-bound-variables)
-               (names--filter-if-bound byte-compile-variables)))
-             (names--fbound
-              (names--remove-namespace-from-list
-               (names--filter-if-bound byte-compile-macro-environment 'names--compat-macrop)
-               (names--filter-if-bound byte-compile-function-environment 'names--compat-macrop)))
-             (names--macro
-              (names--remove-namespace-from-list
-               (names--filter-if-bound byte-compile-macro-environment (lambda (x) (not (names--compat-macrop x))))
-               (names--filter-if-bound byte-compile-function-environment (lambda (x) (not (names--compat-macrop x))))))
-             (names--functionlike-macros names--functionlike-macros)
-             names--keywords names--local-vars key-and-args
-             names--version names--package names--group-parent)
-        ;; Read keywords
-        (while (setq key-and-args (names--next-keyword body))
-          (names--handle-keyword key-and-args)
-          (push key-and-args names--keywords))
+  (let* ((names--name name)
+         (names--regexp
+          (concat "\\`" (regexp-quote (symbol-name name))))
+         (names--current-run 0)
+         ;; Use the :protection keyword to change this.
+         (names--protection "\\`::")
+         (names--bound
+          (names--remove-namespace-from-list
+           (names--filter-if-bound byte-compile-bound-variables)
+           (names--filter-if-bound byte-compile-variables)))
+         (names--fbound
+          (names--remove-namespace-from-list
+           (names--filter-if-bound byte-compile-macro-environment 'names--compat-macrop)
+           (names--filter-if-bound byte-compile-function-environment 'names--compat-macrop)))
+         (names--macro
+          (names--remove-namespace-from-list
+           (names--filter-if-bound byte-compile-macro-environment (lambda (x) (not (names--compat-macrop x))))
+           (names--filter-if-bound byte-compile-function-environment (lambda (x) (not (names--compat-macrop x))))))
+         (names--functionlike-macros names--functionlike-macros)
+         names--keywords names--local-vars key-and-args
+         names--version names--package names--group-parent)
+    ;; Read keywords
+    (while (setq key-and-args (names--next-keyword body))
+      (names--handle-keyword key-and-args)
+      (push key-and-args names--keywords))
 
-        ;; First have to populate the bound and fbound lists. So we read
-        ;; the entire form (without return it).
-        (if names--inside-make-autoload
-            ;; Dependencies haven't been loaded during autoload
-            ;; generation, so we better ignore errors here. Ideally we
-            ;; would only go through the forms marked for autoloading,
-            ;; but then we wouldn't know what symbols are var/function
-            ;; names.
-            (mapc (lambda (form) (ignore-errors (names-convert-form form))) body)
-          (mapc #'names-convert-form body))
-        (setq names--current-run (1+ names--current-run))
+    ;; First have to populate the bound and fbound lists. So we read
+    ;; the entire form (without return it).
+    (if names--inside-make-autoload
+        ;; Dependencies haven't been loaded during autoload
+        ;; generation, so we better ignore errors here. Ideally we
+        ;; would only go through the forms marked for autoloading,
+        ;; but then we wouldn't know what symbols are var/function
+        ;; names.
+        (mapc (lambda (form) (ignore-errors (names-convert-form form))) body)
+      (mapc #'names-convert-form body))
+    (setq names--current-run (1+ names--current-run))
 
-        ;; Then we go back and actually namespace the entire form, which
-        ;; we'll later return so that it can be evaluated.
-        (setq body
-              (cons
-               'progn
-               (append
-                (when (and names--group-parent
-                           (null (names--keyword :clean-output)))
-                  (list (names--generate-defgroup)))
-                (when (and names--version
-                           (null (names--keyword :clean-output)))
-                  ;; `names--generate-version' returns a list.
-                  (names--generate-version))
-                (mapcar 'names-convert-form
-                        ;; Unless we're in `make-autoload', then just return autoloads.
-                        (if names--inside-make-autoload
-                            (names--extract-autoloads body)
-                          body)))))
+    ;; Then we go back and actually namespace the entire form, which
+    ;; we'll later return so that it can be evaluated.
+    (setq body
+          (cons
+           'progn
+           (append
+            (when (and names--group-parent
+                       (null (names--keyword :clean-output)))
+              (list (names--generate-defgroup)))
+            (when (and names--version
+                       (null (names--keyword :clean-output)))
+              ;; `names--generate-version' returns a list.
+              (names--generate-version))
+            (mapcar 'names-convert-form
+                    ;; Unless we're in `make-autoload', then just return autoloads.
+                    (if names--inside-make-autoload
+                        (names--extract-autoloads body)
+                      body)))))
 
-        ;; On emacs-version < 24.4, the byte-compiler cannot expand a
-        ;; macro if it is being called in the same top-level form as
-        ;; it was defined. That's a problem for us, since the entire
-        ;; namespace is a single top-level form (we return a `progn').
-        ;; The solution is for us to add the macros to
-        ;; `byte-compile-macro-environment' ourselves.
-        (if (and (boundp 'byte-compile-current-buffer)
-                 byte-compile-current-buffer
-                 (null names--inside-make-autoload)
-                 (version< emacs-version "24.4"))
-            (let ((byte-compile-macro-environment
-                   (when (boundp 'byte-compile-macro-environment)
-                     byte-compile-macro-environment)))
-              (mapc #'names--add-macro-to-environment (cdr body))
-              (macroexpand-all body byte-compile-macro-environment))
-          body))
-
-    ;; Exiting the `unwind-protect'.
-    (mapc (lambda (x) (set x nil)) names--var-list)))
+    ;; On emacs-version < 24.4, the byte-compiler cannot expand a
+    ;; macro if it is being called in the same top-level form as
+    ;; it was defined. That's a problem for us, since the entire
+    ;; namespace is a single top-level form (we return a `progn').
+    ;; The solution is for us to add the macros to
+    ;; `byte-compile-macro-environment' ourselves.
+    (if (and (boundp 'byte-compile-current-buffer)
+             byte-compile-current-buffer
+             (null names--inside-make-autoload)
+             (version< emacs-version "24.4"))
+        (let ((byte-compile-macro-environment
+               (when (boundp 'byte-compile-macro-environment)
+                 byte-compile-macro-environment)))
+          (mapc #'names--add-macro-to-environment (cdr body))
+          (macroexpand-all body byte-compile-macro-environment))
+      body)))
 
 (defun names--reload-if-upgraded ()
   "Verify if there's a more recent version of Names in the `load-path'.
@@ -1321,6 +1317,10 @@ If STAR is non-nil, parse as a `let*'."
          args))
 (defalias 'names--convert-rx-let 'names--convert-let)
 (defalias 'names--convert-rx-let-eval 'names--convert-let)
+
+(defun names--convert-define-namespace (form)
+  (names-convert-form
+   (names--define-namespace-implementation (cadr form) (cddr form))))
 
 (provide 'names)
 ;;; names.el ends here
